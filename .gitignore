@@ -33,6 +33,18 @@ obj/
 *.so
 *.a
 
+# ML Model files
+*.gguf
+*.bin
+*.onnx
+*.tflite
+*.mlmodel
+*.pt
+*.pth
+*.safetensors
+models/
+app/src/main/assets/models/
+
 # OS-specific files
 .DS_Store
 .DS_Store?
