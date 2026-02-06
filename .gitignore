@@ -1,0 +1,70 @@
+# Gradle files
+.gradle/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.aab
+
+# Keystore files
+*.jks
+*.keystore
+
+# NDK / Native build
+obj/
+.externalNativeBuild/
+.cxx/
+*.o
+*.so
+*.a
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+
+# Temporary files
+*.swp
+*.tmp
+*.temp
+*~
+
+# Kotlin
+.kotlin/
+
+# Test outputs
+/test-results/
+/reports/
+
+# Coverage
+*.ec
+jacoco.exec
+
+# Miscellaneous
+*.orig
+*.rej
+*.swo
+*~
+.cache/
