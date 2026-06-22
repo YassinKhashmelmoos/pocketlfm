@@ -165,12 +165,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildPrompt(userMessage: String): String {
         val systemPrompt = _uiState.value.systemPrompt
         
-        // Simple prompt format (customize based on your model's expected format)
-        return """<|system|>
-$systemPrompt
-<|user|>
-$userMessage
-<|assistant|>
+        // ChatML format — the chat template used by Liquid LFM2.5.
+        return """<|im_start|>system
+$systemPrompt<|im_end|>
+<|im_start|>user
+$userMessage<|im_end|>
+<|im_start|>assistant
 """.trimIndent()
     }
 
