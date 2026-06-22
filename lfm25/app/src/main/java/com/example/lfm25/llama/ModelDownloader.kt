@@ -14,9 +14,9 @@ import java.net.URL
 
 private const val TAG = "ModelDownloader"
 
-// Default model: Liquid AI LFM2.5-1.2B-Instruct (Q4_K_M, ~750MB) — runs fully on-device.
-// Swap this for any GGUF model URL (TinyLlama, Phi, Llama 3.2, etc.).
-const val DEFAULT_MODEL_URL = "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
+// Small model URL (TinyLlama 1.1B Chat - ~600MB)
+// You can change this to any GGUF model URL
+const val DEFAULT_MODEL_URL = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
 const val MODEL_FILENAME = "model.gguf"
 
 sealed class DownloadState {
