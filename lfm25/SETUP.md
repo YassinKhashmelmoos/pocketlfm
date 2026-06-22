@@ -58,22 +58,33 @@ Required files:
 
 ### Step 2: Download a GGUF Model
 
-Download a compatible GGUF model. Recommended small models for Android:
+**PocketLFM ships with Liquid AI's LFM2.5-1.2B-Instruct** — edge-optimized, runs under 1 GB RAM.
+The app auto-downloads it on first launch, so you usually don't need to do anything here.
 
-1. **TinyLlama-1.1B** (~600MB)
-   ```bash
-   wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
-   ```
+**Default model (recommended):**
 
-2. **Phi-2** (~1.6GB)
-   ```bash
-   wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf
-   ```
+- **LFM2.5-1.2B-Instruct** (~750MB, Q4_K_M) — chat template: ChatML
+  ```bash
+  wget https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf
+  ```
 
-3. **Llama-3.2-1B** (~700MB)
-   ```bash
-   wget https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-   ```
+**Want a different model?** PocketLFM runs any GGUF — just swap the URL in
+`ModelDownloader.kt` (and match the chat template in `ChatViewModel.kt`). Examples:
+
+- **TinyLlama-1.1B** (~600MB)
+  ```bash
+  wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+  ```
+
+- **Phi-2** (~1.6GB)
+  ```bash
+  wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf
+  ```
+
+- **Llama-3.2-1B** (~700MB)
+  ```bash
+  wget https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+  ```
 
 Copy the downloaded model to:
 ```
