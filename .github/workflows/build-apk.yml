@@ -19,25 +19,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK + NDK
+      - name: Install NDK and CMake
         run: |
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
-          unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
-          mv /tmp/cmdtools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
-
-          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
-
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-
-          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "platform-tools" "platforms;android-36" "build-tools;34.0.0"
-
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "build-tools;34.0.0"
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
       - name: Make gradlew executable
         run: chmod +x lfm25/gradlew
@@ -45,6 +32,10 @@ jobs:
       - name: Build Debug APK
         working-directory: lfm25
         run: ./gradlew assembleDebug --stacktrace
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/25.2.9519653
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
