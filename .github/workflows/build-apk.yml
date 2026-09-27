@@ -21,10 +21,10 @@ jobs:
 
       - name: Install NDK and CMake
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "build-tools;34.0.0"
-        env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          SDKMANAGER=$(find /usr/local/lib/android/sdk -name "sdkmanager" | head -1)
+          echo "Found sdkmanager at: $SDKMANAGER"
+          yes | $SDKMANAGER --licenses > /dev/null 2>&1 || true
+          $SDKMANAGER "ndk;25.2.9519653" "cmake;3.22.1" "build-tools;34.0.0"
 
       - name: Make gradlew executable
         run: chmod +x lfm25/gradlew
@@ -33,7 +33,6 @@ jobs:
         working-directory: lfm25
         run: ./gradlew assembleDebug --stacktrace
         env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/25.2.9519653
 
