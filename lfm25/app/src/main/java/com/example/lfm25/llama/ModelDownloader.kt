@@ -16,7 +16,7 @@ private const val TAG = "ModelDownloader"
 
 // Small model URL (TinyLlama 1.1B Chat - ~600MB)
 // You can change this to any GGUF model URL
-const val DEFAULT_MODEL_URL = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+const val DEFAULT_MODEL_URL = "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-Q4_K_M.gguf"
 const val MODEL_FILENAME = "model.gguf"
 
 sealed class DownloadState {
