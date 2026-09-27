@@ -19,10 +19,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Download model into assets
+        run: |
+          mkdir -p lfm25/app/src/main/assets
+          wget -q --show-progress \
+            "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-Q4_K_M.gguf" \
+            -O lfm25/app/src/main/assets/model.gguf
+          ls -lh lfm25/app/src/main/assets/
+
       - name: Install NDK and CMake
         run: |
           SDKMANAGER=$(find /usr/local/lib/android/sdk -name "sdkmanager" | head -1)
-          echo "Found sdkmanager at: $SDKMANAGER"
           yes | $SDKMANAGER --licenses > /dev/null 2>&1 || true
           $SDKMANAGER "ndk;25.2.9519653" "cmake;3.22.1" "build-tools;34.0.0"
 
