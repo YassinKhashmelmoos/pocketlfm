@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -13,7 +14,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.lfm25.data.ChatDatabase
 import com.example.lfm25.data.MessageEntity
 import com.example.lfm25.data.SessionEntity
+import com.example.lfm25.intelligence.KnowledgeGraph
+import com.example.lfm25.intelligence.NightlyTrainer
+import com.example.lfm25.intelligence.TinyRL
 import com.example.lfm25.llama.LlamaModel
+import com.example.lfm25.notification.UpdateNotificationListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
@@ -26,50 +31,44 @@ import java.util.UUID
 private const val TAG = "ThunderAGI"
 
 // ── LFM2.5-VL Zephyr chat template ───────────────────────────────────────────
-// LiquidAI's LFM2.5 uses the Zephyr format:
-//   <|system|>\n{content}<|endoftext|>\n
-//   <|user|>\n{content}<|endoftext|>\n
-//   <|assistant|>\n
-// parse_special=true in the JNI tokenizer handles the special tokens correctly.
+// Exact format LiquidAI used during training.
+// parse_special=true in JNI tokenizer ensures these are single tokens.
 
-private const val SYSTEM_PROMPT = """You are Thunder AGI (الرَّعد), a powerful and intelligent AI assistant running fully on-device. You are direct, knowledgeable, and helpful. You give clear, accurate answers. You support Arabic and English. When asked something short, give a short answer. When asked something complex, reason through it step by step."""
+private const val BASE_SYSTEM_PROMPT = """You are Thunder AGI (الرَّعد للذكاء العام المصطنع), a powerful, knowledgeable, and helpful AI assistant running fully on your device. You are direct and clear. You answer in the same language the user uses — Arabic or English. For short questions give short answers. For complex questions reason step by step."""
 
-private fun buildZephyrPrompt(history: List<ChatMessage>, userText: String, imagePath: String?): String {
+private suspend fun buildZephyrPrompt(
+    history: List<ChatMessage>,
+    userText: String,
+    imagePath: String?,
+    knowledgeGraph: KnowledgeGraph,
+    softPromptFile: File?
+): String {
     val sb = StringBuilder()
-    // System turn
-    sb.append("<|system|>\n$SYSTEM_PROMPT<|endoftext|>\n")
-    // History turns (last 8 to stay within context)
-    history.takeLast(8).forEach { msg ->
-        if (msg.isUser) {
-            sb.append("<|user|>\n${msg.content}<|endoftext|>\n")
-        } else {
-            sb.append("<|assistant|>\n${msg.content}<|endoftext|>\n")
-        }
-    }
-    // Current user turn
-    val imageNote = if (imagePath != null) "\n[Attached image: $imagePath]" else ""
-    sb.append("<|user|>\n$userText$imageNote<|endoftext|>\n")
-    // Assistant turn opener — model continues from here
-    sb.append("<|assistant|>\n")
-    return sb.toString()
-}
 
-// ── Adaptive sampling ─────────────────────────────────────────────────────────
-// Short/factual prompts → lower temperature for focused answers
-// Creative/open prompts → higher temperature for variety
-private fun adaptiveTemperature(userText: String): Float {
-    val lower = userText.lowercase()
-    val isFactual = lower.startsWith("what ") || lower.startsWith("who ") ||
-        lower.startsWith("when ") || lower.startsWith("where ") ||
-        lower.startsWith("how many") || lower.startsWith("define ") ||
-        lower.startsWith("translate") || lower.contains("كم") || lower.contains("ما هو")
-    val isCreative = lower.startsWith("write ") || lower.startsWith("create ") ||
-        lower.startsWith("imagine ") || lower.startsWith("story") || lower.startsWith("poem")
-    return when {
-        isFactual  -> 0.25f
-        isCreative -> 0.75f
-        else       -> 0.40f
+    // Inject learned knowledge context into system prompt
+    val kgContext = knowledgeGraph.buildContextString()
+    val systemFull = if (kgContext.isNotBlank()) "$BASE_SYSTEM_PROMPT\n\n$kgContext" else BASE_SYSTEM_PROMPT
+
+    sb.append("<|system|>\n$systemFull<|endoftext|>\n")
+
+    // Inject soft prompt (learned examples from nightly training)
+    softPromptFile?.takeIf { it.exists() }?.let {
+        val softPrompt = it.readText().trim()
+        if (softPrompt.isNotBlank()) sb.append(softPrompt).append("\n")
     }
+
+    // History (last 10 turns to stay in context)
+    history.takeLast(10).forEach { msg ->
+        if (msg.isUser) sb.append("<|user|>\n${msg.content}<|endoftext|>\n")
+        else            sb.append("<|assistant|>\n${msg.content}<|endoftext|>\n")
+    }
+
+    // Current turn
+    val imgNote = if (imagePath != null) "\n[Image: $imagePath]" else ""
+    sb.append("<|user|>\n$userText$imgNote<|endoftext|>\n")
+    sb.append("<|assistant|>\n")
+
+    return sb.toString()
 }
 
 // ── Data classes ──────────────────────────────────────────────────────────────
@@ -95,7 +94,9 @@ data class ChatUiState(
     val error: String? = null,
     val isRecording: Boolean = false,
     val showSessionDrawer: Boolean = false,
-    val snackbar: String? = null
+    val showSettings: Boolean = false,
+    val snackbar: String? = null,
+    val notifPermissionNeeded: Boolean = false
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -104,14 +105,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _ui = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _ui.asStateFlow()
 
-    private val model = LlamaModel.getInstance()
-    private val db    = ChatDatabase.getInstance(application)
+    private val model         = LlamaModel.getInstance()
+    private val db            = ChatDatabase.getInstance(application)
+    private val knowledgeGraph = KnowledgeGraph(application)
+    private val tinyRL        = TinyRL(application)
+    private val nightlyTrainer = NightlyTrainer(application)
+    private val softPromptFile = File(application.filesDir, "soft_prompt_cache.txt")
+
     private var sessionJob: Job? = null
     private var speechRecognizer: SpeechRecognizer? = null
 
     init {
         observeSessions()
         ensureModelLoaded()
+        nightlyTrainer.schedule()
+        checkNotifPermission()
     }
 
     // ── Model ──────────────────────────────────────────────────────────────────
@@ -183,7 +191,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleDrawer() = _ui.update { it.copy(showSessionDrawer = !it.showSessionDrawer) }
+    fun toggleDrawer()   = _ui.update { it.copy(showSessionDrawer = !it.showSessionDrawer) }
+    fun toggleSettings() = _ui.update { it.copy(showSettings = !it.showSettings) }
 
     // ── Messaging ──────────────────────────────────────────────────────────────
 
@@ -198,17 +207,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val imgPath = imageUri?.let { saveUri(it) }
             val userMsg = ChatMessage(
-                content = text.ifBlank { "[Image]" },
-                isUser = true,
+                content  = text.ifBlank { "[Image]" },
+                isUser   = true,
                 mediaPath = imgPath,
                 mediaType = if (imgPath != null) "image" else null
             )
             persistAndShow(userMsg, sid)
 
-            // Auto-title from first message
+            // Auto-title from first user message
             if (_ui.value.messages.count { it.isUser } <= 1 && text.isNotBlank()) {
-                val title = text.take(45).trim()
-                db.sessionDao().insert(SessionEntity(id = sid, title = title, updatedAt = System.currentTimeMillis()))
+                db.sessionDao().insert(SessionEntity(id = sid, title = text.take(45).trim(),
+                    updatedAt = System.currentTimeMillis()))
             }
 
             generateResponse(text, imgPath, sid)
@@ -218,21 +227,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun generateResponse(userText: String, imagePath: String?, sessionId: String) {
         viewModelScope.launch {
             _ui.update { it.copy(isGenerating = true) }
-            _ui.update { it.copy(messages = it.messages + ChatMessage(content = "", isUser = false, isLoading = true)) }
+            _ui.update { it.copy(messages = it.messages +
+                    ChatMessage(content = "", isUser = false, isLoading = true)) }
 
-            // Build correct LFM2.5-VL Zephyr prompt from full history
-            val history = _ui.value.messages.filterNot { it.isLoading || it.isUser && it.content == userText }
-            val prompt = buildZephyrPrompt(history, userText, imagePath)
-            val temp   = adaptiveTemperature(userText)
+            val history = _ui.value.messages.filterNot { it.isLoading }
+            val prompt  = buildZephyrPrompt(history, userText, imagePath, knowledgeGraph, softPromptFile)
 
-            Log.d(TAG, "Prompt template built, temp=$temp")
+            // TinyRL: get learned sampling params for this topic
+            val topic   = tinyRL.classifyTopic(userText)
+            val rlParams = tinyRL.getParams(topic)
+
+            Log.d(TAG, "topic=$topic temp=${rlParams.temperature}")
 
             val response = model.generate(
                 prompt        = prompt,
-                temperature   = temp,
-                topP          = 0.92f,
+                temperature   = rlParams.temperature,
+                topP          = rlParams.topP,
                 topK          = 50,
-                repeatPenalty = 1.15f,
+                repeatPenalty = rlParams.repPenalty,
                 maxTokens     = 512
             )
 
@@ -241,6 +253,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val aiMsg = ChatMessage(content = response.ifBlank { "..." }, isUser = false)
             persistAndShow(aiMsg, sessionId)
             _ui.update { it.copy(isGenerating = false) }
+
+            // Learn from conversation asynchronously
+            launch(Dispatchers.IO) {
+                knowledgeGraph.learnFromConversation(userText, response)
+            }
         }
     }
 
@@ -262,11 +279,56 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Feedback (TinyRL) ──────────────────────────────────────────────────────
+
+    fun submitFeedback(msgId: String, good: Boolean) {
+        val msg  = _ui.value.messages.find { it.id == msgId } ?: return
+        val prev = _ui.value.messages.takeWhile { it.id != msgId }.lastOrNull { it.isUser }
+
+        // Apply RL signal
+        val topic = tinyRL.classifyTopic(prev?.content ?: "")
+        tinyRL.applyFeedback(topic, good)
+
+        // Persist for nightly training
+        viewModelScope.launch(Dispatchers.IO) {
+            val line = """{"prompt":${prev?.content.orEmpty().jsonStr()},"response":${msg.content.jsonStr()},"good":$good}""" + "\n"
+            File(getApplication<Application>().filesDir, "feedback_log.jsonl").appendText(line)
+        }
+        _ui.update { it.copy(snackbar = if (good) "👍 Saved — model will improve!" else "👎 Noted") }
+    }
+
+    fun importFineTune(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dest = File(getApplication<Application>().filesDir, "finetune_import.gguf")
+                getApplication<Application>().contentResolver.openInputStream(uri)?.use { i ->
+                    FileOutputStream(dest).use { o -> i.copyTo(o) }
+                }
+                _ui.update { it.copy(snackbar = "Fine-tune imported! Restart app to apply.") }
+            } catch (e: Exception) {
+                _ui.update { it.copy(snackbar = "Import failed: ${e.message}") }
+            }
+        }
+    }
+
+    // ── Notification / WhatsApp sync ───────────────────────────────────────────
+
+    private fun checkNotifPermission() {
+        val granted = UpdateNotificationListener.isPermissionGranted(getApplication())
+        _ui.update { it.copy(notifPermissionNeeded = !granted) }
+    }
+
+    fun openNotifPermissionSettings(context: Context) {
+        UpdateNotificationListener.openPermissionSettings(context)
+    }
+
+    fun dismissNotifPrompt() = _ui.update { it.copy(notifPermissionNeeded = false) }
+
     // ── Voice ──────────────────────────────────────────────────────────────────
 
     fun startVoice(context: Context) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            _ui.update { it.copy(snackbar = "Speech recognition not available on this device") }
+            _ui.update { it.copy(snackbar = "Speech recognition not available") }
             return
         }
         speechRecognizer?.destroy()
@@ -291,7 +353,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             sr.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             })
         }
     }
@@ -301,52 +362,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(isRecording = false) }
     }
 
-    // ── Feedback ───────────────────────────────────────────────────────────────
-
-    fun submitFeedback(msgId: String, good: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val msg  = _ui.value.messages.find { it.id == msgId } ?: return@launch
-            val prev = _ui.value.messages.takeWhile { it.id != msgId }.lastOrNull { it.isUser }
-            val line = """{"prompt":${prev?.content.orEmpty().jsonStr()},"response":${msg.content.jsonStr()},"good":$good}""" + "\n"
-            File(getApplication<Application>().filesDir, "feedback_log.jsonl").appendText(line)
-            _ui.update { it.copy(snackbar = if (good) "👍 Saved" else "👎 Noted") }
-        }
-    }
-
-    fun importFineTune(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val dest = File(getApplication<Application>().filesDir, "finetune_import.gguf")
-                getApplication<Application>().contentResolver.openInputStream(uri)?.use { i ->
-                    FileOutputStream(dest).use { o -> i.copyTo(o) }
-                }
-                _ui.update { it.copy(snackbar = "Fine-tune imported! Restart app to apply.") }
-            } catch (e: Exception) {
-                _ui.update { it.copy(snackbar = "Import failed: ${e.message}") }
-            }
-        }
-    }
-
     fun clearSnackbar() = _ui.update { it.copy(snackbar = null) }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private suspend fun saveUri(uri: Uri): String? = withContext(Dispatchers.IO) {
         try {
-            val ext = getApplication<Application>().contentResolver.getType(uri)?.substringAfterLast("/") ?: "jpg"
+            val ext = getApplication<Application>().contentResolver.getType(uri)
+                ?.substringAfterLast("/") ?: "jpg"
             val f = File(getApplication<Application>().filesDir, "img_${System.currentTimeMillis()}.$ext")
-            getApplication<Application>().contentResolver.openInputStream(uri)?.use { i ->
-                FileOutputStream(f).use { o -> i.copyTo(o) }
-            }
+            getApplication<Application>().contentResolver.openInputStream(uri)
+                ?.use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
             f.absolutePath
         } catch (e: Exception) { null }
     }
 
-    private fun String.jsonStr() = "\"${replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n")}\""
+    private fun String.jsonStr() =
+        "\"${replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n")}\""
 
     override fun onCleared() {
         super.onCleared()
         speechRecognizer?.destroy()
-        // Do NOT unload model — stays resident across ViewModel recreation
+        knowledgeGraph.close()
     }
 }
