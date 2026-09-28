@@ -98,6 +98,9 @@ dependencies {
 
     // Coil (image display in chat)
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // WorkManager for nightly training scheduler
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
