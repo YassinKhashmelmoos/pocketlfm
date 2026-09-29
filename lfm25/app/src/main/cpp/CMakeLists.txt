@@ -5,8 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Base flags ────────────────────────────────────────────────────────────────
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -ffast-math")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -ffast-math -fPIC")
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -fno-finite-math-only")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -fno-finite-math-only -fPIC")
 
 add_compile_definitions(
     GGML_VERSION="b4351"
@@ -60,13 +60,12 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     # armv8.2-a is safe for any phone ≥ 2018 (SD835+, Kirin 970+, Dimensity 800+).
     target_compile_options(ggml  PRIVATE
         -march=armv8.2-a+dotprod+fp16
-        -O3 -ffast-math
+        -O3 -fno-finite-math-only
         -D__ARM_NEON
-        -DGGML_USE_LLAMAFILE        # use llamafile SIMD kernels when available
     )
     target_compile_options(llama PRIVATE
         -march=armv8.2-a+dotprod+fp16
-        -O3 -ffast-math
+        -O3 -fno-finite-math-only
         -D__ARM_NEON
     )
 elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
