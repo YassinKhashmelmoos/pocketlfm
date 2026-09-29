@@ -192,7 +192,7 @@ Java_com_example_lfm25_llama_LlamaModel_nativeGenerate(
     // ── Context guard ─────────────────────────────────────────────────────
     if (g_n_past + n_tokens + max_tokens >= g_ctx_size) {
         LOGW("Context full, resetting");
-        llama_kv_cache_clear(g_ctx);
+        llama_memory_clear(llama_get_memory(g_ctx), true);
         g_n_past = 0;
     }
 
@@ -200,7 +200,7 @@ Java_com_example_lfm25_llama_LlamaModel_nativeGenerate(
 
     // ── Prompt ingestion (delta: only feed new tokens) ────────────────────
     int feed_from = (g_n_past > 0 && g_n_past <= n_tokens) ? g_n_past : 0;
-    if (feed_from == 0) { llama_kv_cache_clear(g_ctx); g_n_past = 0; }
+    if (feed_from == 0) { llama_memory_clear(llama_get_memory(g_ctx), true); g_n_past = 0; }
 
     llama_batch batch = llama_batch_init(BATCH_SIZE, 0, 1);
     for (int i = feed_from; i < n_tokens; ) {
@@ -257,7 +257,7 @@ Java_com_example_lfm25_llama_LlamaModel_nativeGenerate(
 JNIEXPORT void JNICALL
 Java_com_example_lfm25_llama_LlamaModel_nativeResetContext(JNIEnv*, jclass) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_ctx) { llama_kv_cache_clear(g_ctx); g_n_past = 0; }
+    if (g_ctx) { llama_memory_clear(llama_get_memory(g_ctx), true); g_n_past = 0; }
     LOGI("Context reset");
 }
 
