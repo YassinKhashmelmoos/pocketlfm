@@ -371,7 +371,11 @@ private fun InputBar(
 
 @Composable
 private fun LoadingView() {
-    Column(Modifier.fillMaxSize(), Alignment.CenterHorizontally, Arrangement.Center) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
         CircularProgressIndicator(Modifier.size(64.dp), strokeWidth = 4.dp)
         Spacer(Modifier.height(24.dp))
         Text("Loading Thunder AGI…", style = MaterialTheme.typography.titleMedium)
@@ -380,7 +384,11 @@ private fun LoadingView() {
 
 @Composable
 private fun ErrorView(error: String, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(32.dp), Alignment.CenterHorizontally, Arrangement.Center) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
         Icon(Icons.Default.Error, null, Modifier.size(64.dp), tint = MaterialTheme.colorScheme.error)
         Spacer(Modifier.height(16.dp))
         Text("Failed to Load Model", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
