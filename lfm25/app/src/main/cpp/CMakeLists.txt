@@ -4,7 +4,7 @@ project("thunder-agi")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── Base flags ────────────────────────────────────────────────────────────────
+# Safe flags — no -ffast-math, no -ffinite-math-only (ggml forbids it)
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -fno-finite-math-only")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -fno-finite-math-only -fPIC")
 
@@ -16,18 +16,30 @@ add_compile_definitions(
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ggml-cpu)
 
-# ── Sources ───────────────────────────────────────────────────────────────────
+# GGML core sources
 set(GGML_SOURCES
-    ggml.c ggml-alloc.c ggml-backend.cpp ggml-backend-reg.cpp
-    ggml-backend-dl.cpp ggml-quants.c ggml-opt.cpp
-    ggml-threading.cpp gguf.cpp
+    ggml.c
+    ggml-alloc.c
+    ggml-backend.cpp
+    ggml-backend-reg.cpp
+    ggml-backend-dl.cpp
+    ggml-quants.c
+    ggml-opt.cpp
+    ggml-threading.cpp
+    gguf.cpp
 )
 
+# CPU backend sources
 set(GGML_CPU_SOURCES
-    ggml-cpu/ggml-cpu.c ggml-cpu/ggml-cpu.cpp
-    ggml-cpu/ops.cpp ggml-cpu/vec.cpp ggml-cpu/traits.cpp
-    ggml-cpu/repack.cpp ggml-cpu/unary-ops.cpp
-    ggml-cpu/binary-ops.cpp ggml-cpu/quants.c
+    ggml-cpu/ggml-cpu.c
+    ggml-cpu/ggml-cpu.cpp
+    ggml-cpu/ops.cpp
+    ggml-cpu/vec.cpp
+    ggml-cpu/traits.cpp
+    ggml-cpu/repack.cpp
+    ggml-cpu/unary-ops.cpp
+    ggml-cpu/binary-ops.cpp
+    ggml-cpu/quants.c
 )
 
 file(GLOB MODEL_SOURCES models/*.cpp)
@@ -44,30 +56,18 @@ set(LLAMA_SOURCES
     llama-vocab.cpp unicode.cpp unicode-data.cpp
 )
 
-# ── Libraries ─────────────────────────────────────────────────────────────────
 add_library(ggml  STATIC ${GGML_SOURCES} ${GGML_CPU_SOURCES})
 add_library(llama STATIC ${LLAMA_SOURCES} ${MODEL_SOURCES})
 
-target_compile_definitions(ggml  PUBLIC GGML_USE_CPU GGML_BUILD)
+# GGML_CPU_GENERIC ensures all quant dot-product functions are compiled in
+target_compile_definitions(ggml  PUBLIC GGML_USE_CPU GGML_BUILD GGML_CPU_GENERIC)
 target_compile_definitions(llama PUBLIC GGML_USE_CPU)
 
-# ── ARM optimizations ─────────────────────────────────────────────────────────
-# LFM2.5 uses short-conv (SIMD-heavy) + attention layers.
-# ARMv8.2-A with dotprod+fp16 gives ~40% speedup on Snapdragon 8xx / Dimensity 9xx.
-# fp16 arithmetic halves memory bandwidth for weight reads.
+# ARM NEON — use armv8-a (safe for all Android phones since 2014)
+# armv8.2-a caused missing quant symbols; keep it simple and reliable
 if(ANDROID_ABI STREQUAL "arm64-v8a")
-    # Detect capabilities at runtime via -march=native equivalent for cross-compile.
-    # armv8.2-a is safe for any phone ≥ 2018 (SD835+, Kirin 970+, Dimensity 800+).
-    target_compile_options(ggml  PRIVATE
-        -march=armv8.2-a+dotprod+fp16
-        -O3 -fno-finite-math-only
-        -D__ARM_NEON
-    )
-    target_compile_options(llama PRIVATE
-        -march=armv8.2-a+dotprod+fp16
-        -O3 -fno-finite-math-only
-        -D__ARM_NEON
-    )
+    target_compile_options(ggml  PRIVATE -march=armv8-a -O3 -D__ARM_NEON)
+    target_compile_options(llama PRIVATE -march=armv8-a -O3 -D__ARM_NEON)
 elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
     target_compile_options(ggml  PRIVATE -mfloat-abi=softfp -mfpu=neon -O3 -D__ARM_NEON)
     target_compile_options(llama PRIVATE -mfloat-abi=softfp -mfpu=neon -O3 -D__ARM_NEON)
@@ -75,7 +75,6 @@ endif()
 
 target_link_libraries(llama ggml)
 
-# ── JNI bridge ────────────────────────────────────────────────────────────────
 add_library(llama-jni SHARED llama-jni.cpp)
 target_link_libraries(llama-jni llama ggml android log dl)
 target_include_directories(llama-jni PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
