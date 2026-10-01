@@ -519,8 +519,7 @@ private fun MessageBubble(
             }
 
             // Context menu
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false },
-                containerColor = ThunderMidBlue) {
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                 DropdownMenuItem(
                     text = { Text("Copy", color = ThunderWhite) },
                     leadingIcon = { Icon(Icons.Default.ContentCopy, null, tint = ThunderElectric) },
