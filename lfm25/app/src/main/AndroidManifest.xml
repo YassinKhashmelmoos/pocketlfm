@@ -30,6 +30,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Lfm25"
         android:largeHeap="true"
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:hardwareAccelerated="true">
 
         <activity
