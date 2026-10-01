@@ -22,16 +22,17 @@ jobs:
       - name: Install Python + Pillow for icon resize
         run: pip install Pillow
 
-      - name: Download custom icon and generate all mipmap sizes
+      - name: Generate all mipmap icon sizes from source icon
         run: |
-          # The icon is committed to the repo at assets/app_icon_source.jpg
-          # If not present, skip (keeps existing icons)
-          if [ -f "lfm25/app/src/main/assets/app_icon_source.jpg" ]; then
-            python3 << 'PYEOF'
+          python3 << 'PYEOF'
           from PIL import Image
-          import os
+          import os, sys
+          src = "lfm25/app/src/main/assets/app_icon_source.jpg"
+          if not os.path.exists(src):
+              print("ERROR: app_icon_source.jpg not found in assets!")
+              sys.exit(1)
           sizes = {"mdpi":48,"hdpi":72,"xhdpi":96,"xxhdpi":144,"xxxhdpi":192}
-          img = Image.open("lfm25/app/src/main/assets/app_icon_source.jpg").convert("RGBA")
+          img = Image.open(src).convert("RGBA")
           for name, size in sizes.items():
               d = f"lfm25/app/src/main/res/mipmap-{name}"
               os.makedirs(d, exist_ok=True)
@@ -39,8 +40,8 @@ jobs:
               r.save(f"{d}/ic_launcher.webp","WEBP")
               r.save(f"{d}/ic_launcher_round.webp","WEBP")
               print(f"✓ {name} {size}x{size}")
+          print("All icons generated!")
           PYEOF
-          fi
 
       - name: Download model into assets
         run: |
