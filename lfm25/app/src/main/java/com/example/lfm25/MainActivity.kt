@@ -27,21 +27,30 @@ class MainActivity : ComponentActivity() {
                     val ui by vm.uiState.collectAsStateWithLifecycle()
                     val ctx = LocalContext.current
                     ChatScreen(
-                        uiState           = ui,
-                        onInputChanged    = vm::onInputChanged,
-                        onSendMessage     = { uri -> vm.sendMessage(uri) },
-                        onClearChat       = vm::clearChat,
-                        onRetryLoadModel  = vm::retryLoadModel,
-                        onNewSession      = vm::newSession,
-                        onSwitchSession   = vm::switchSession,
-                        onDeleteSession   = vm::deleteSession,
-                        onToggleDrawer    = vm::toggleDrawer,
-                        onStartVoice      = { vm.startVoice(ctx) },
-                        onStopVoice       = vm::stopVoice,
-                        onThumbsUp        = { vm.submitFeedback(it, true) },
-                        onThumbsDown      = { vm.submitFeedback(it, false) },
-                        onImportFineTune  = vm::importFineTune,
-                        onClearSnackbar   = vm::clearSnackbar
+                        uiState              = ui,
+                        onInputChanged       = vm::onInputChanged,
+                        onSendMessage        = vm::sendMessage,
+                        onClearChat          = vm::clearChat,
+                        onRetryLoadModel     = vm::retryLoadModel,
+                        onNewSession         = vm::newSession,
+                        onSwitchSession      = vm::switchSession,
+                        onDeleteSession      = vm::deleteSession,
+                        onRenameSession      = vm::renameSession,
+                        onToggleDrawer       = vm::toggleDrawer,
+                        onStartVoice         = { vm.startVoice(ctx) },
+                        onStopVoice          = vm::stopVoice,
+                        onThumbsUp           = { vm.submitFeedback(it, true) },
+                        onThumbsDown         = { vm.submitFeedback(it, false) },
+                        onImportFineTune     = vm::importFineTune,
+                        onExportFeedback     = vm::exportFeedbackLog,
+                        onClearSnackbar      = vm::clearSnackbar,
+                        onToggleWebSearch    = vm::toggleWebSearch,
+                        onSetPendingImage    = vm::setPendingImage,
+                        onToggleSettings     = vm::toggleSettings,
+                        onSaveUserName       = vm::saveUserName,
+                        onSaveSystemPrompt   = vm::saveSystemPrompt,
+                        currentSystemPrompt  = vm::getSystemPrompt,
+                        onClearCrash         = vm::clearCrashLog
                     )
                 }
             }
