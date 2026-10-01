@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
                         onToggleSettings     = vm::toggleSettings,
                         onSaveUserName       = vm::saveUserName,
                         onSaveSystemPrompt   = vm::saveSystemPrompt,
-                        currentSystemPrompt  = vm::getSystemPrompt,
+                        currentSystemPrompt  = vm::fetchSystemPrompt,
                         onClearCrash         = vm::clearCrashLog
                     )
                 }
