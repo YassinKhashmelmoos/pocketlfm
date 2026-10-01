@@ -101,6 +101,16 @@ dependencies {
 
     // WorkManager for nightly training scheduler
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // OkHttp for reliable HTTP calls (agent tools)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // JSON parsing
+    implementation("org.json:json:20231013")
+
+    // WebView is part of Android SDK — no extra dependency needed
+    // Script engine for math eval
+    implementation("org.mozilla:rhino:1.7.14")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
