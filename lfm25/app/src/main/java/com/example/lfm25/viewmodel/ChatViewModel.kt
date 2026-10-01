@@ -18,6 +18,10 @@ import com.example.lfm25.intelligence.KnowledgeGraph
 import com.example.lfm25.intelligence.NightlyTrainer
 import com.example.lfm25.intelligence.TinyRL
 import com.example.lfm25.llama.LlamaModel
+import com.example.lfm25.agent.AgentToolkit
+import com.example.lfm25.agent.CodeExecutor
+import com.example.lfm25.agent.CrashReporter
+import com.example.lfm25.agent.EmotionDetector
 import com.example.lfm25.notification.UpdateNotificationListener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -131,6 +135,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val softPromptFile = File(application.filesDir, "soft_prompt_cache.txt")
+    private val agentToolkit  = AgentToolkit(application)
+    private val codeExecutor  = CodeExecutor(application)
+    private val crashReporter = CrashReporter.install(application)
     private var sessionJob: Job? = null
     private var speechRecognizer: SpeechRecognizer? = null
 
@@ -316,12 +323,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
+                // Gather tool context (weather, wikipedia, search etc.)
+                val toolContext = agentToolkit.gatherContext(userText, _ui.value.webSearchEnabled)
+
+                // Emotion detection
+                val emotionHint = EmotionDetector.getSystemHint(userText)
+
                 val softCache = if (softPromptFile.exists()) softPromptFile.readText() else ""
+                val effectiveSystem = systemPrompt + emotionHint
                 val prompt = buildZephyrPrompt(
                     sessionHistory = sessionHistory,
-                    userText       = augmentedText,
+                    userText       = if (toolContext.isNotBlank()) "$toolContext$augmentedText" else augmentedText,
                     imagePath      = imagePath,
-                    systemPrompt   = systemPrompt,
+                    systemPrompt   = effectiveSystem,
                     softPromptCache = softCache
                 )
 
@@ -407,7 +421,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveSystemPrompt(prompt: String) { systemPrompt = prompt }
-    fun getSystemPrompt() = systemPrompt
+    fun fetchSystemPrompt() = systemPrompt
     fun toggleWebSearch() = _ui.update { it.copy(webSearchEnabled = !it.webSearchEnabled) }
 
     // ── Feedback (TinyRL) ──────────────────────────────────────────────────────
