@@ -577,7 +577,7 @@ private fun ThinkingBox(step: String, expanded: Boolean, onToggle: () -> Unit) {
 }
 
 @Composable
-private fun CodeAwareText(content: String) {
+private fun CodeAwareText(content: String, onRunCode: ((String, String) -> Unit)? = null) {
     val parts = content.split("```")
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         parts.forEachIndexed { i, part ->
@@ -586,19 +586,53 @@ private fun CodeAwareText(content: String) {
                     Text(part.trim(), style = MaterialTheme.typography.bodyMedium,
                         color = ThunderWhite, lineHeight = 22.sp)
             } else {
+                // First line is language hint
                 val lines = part.trimStart('\n')
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF0D1117))
-                        .border(0.5.dp, ThunderMidBlue, RoundedCornerShape(8.dp))
-                        .horizontalScroll(rememberScrollState())
-                        .padding(12.dp)
-                ) {
-                    Text(lines, style = MaterialTheme.typography.bodySmall
-                        .copy(fontFamily = FontFamily.Monospace),
-                        color = ThunderGlow, softWrap = false)
+                val firstLine = lines.lines().firstOrNull()?.trim() ?: ""
+                val isLangHint = firstLine.matches(Regex("[a-zA-Z]+"))
+                val lang = if (isLangHint) firstLine else "code"
+                val code = if (isLangHint) lines.lines().drop(1).joinToString("\n") else lines
+
+                Column {
+                    // Header bar
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
+                            .background(Color(0xFF161B22))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(lang, style = MaterialTheme.typography.labelSmall, color = ThunderGray)
+                        if (onRunCode != null && lang.lowercase() in listOf("python","javascript","js","java","kotlin")) {
+                            TextButton(
+                                onClick = { onRunCode(code, lang) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.PlayArrow, null, tint = ThunderGreen,
+                                    modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Run", color = ThunderGreen,
+                                    style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    // Code body
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                            .background(Color(0xFF0D1117))
+                            .border(0.5.dp, ThunderMidBlue,
+                                RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                            .horizontalScroll(rememberScrollState())
+                            .padding(12.dp)
+                    ) {
+                        Text(code.trim(), style = MaterialTheme.typography.bodySmall
+                            .copy(fontFamily = FontFamily.Monospace),
+                            color = ThunderGlow, softWrap = false)
+                    }
                 }
             }
         }
