@@ -3,8 +3,8 @@ package com.example.lfm25.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
-import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -19,56 +19,68 @@ import com.example.lfm25.intelligence.NightlyTrainer
 import com.example.lfm25.intelligence.TinyRL
 import com.example.lfm25.llama.LlamaModel
 import com.example.lfm25.notification.UpdateNotificationListener
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URL
 import java.util.UUID
 
 private const val TAG = "ThunderAGI"
+private const val PREFS_NAME = "thunder_agi_prefs"
 
-// ── LFM2.5-VL Zephyr chat template ───────────────────────────────────────────
-// Exact format LiquidAI used during training.
-// parse_special=true in JNI tokenizer ensures these are single tokens.
-
-private const val BASE_SYSTEM_PROMPT = """You are Thunder AGI (الرَّعد للذكاء العام المصطنع), a powerful, knowledgeable, and helpful AI assistant running fully on your device. You are direct and clear. You answer in the same language the user uses — Arabic or English. For short questions give short answers. For complex questions reason step by step."""
-
-private suspend fun buildZephyrPrompt(
-    history: List<ChatMessage>,
+// ── LFM2.5-VL Zephyr prompt builder ──────────────────────────────────────────
+// CRITICAL FIX: Only pass messages already in DB (not the current turn being built)
+// and only from the CURRENT session. Context is reset on session switch.
+private fun buildZephyrPrompt(
+    sessionHistory: List<ChatMessage>,   // messages already saved, current session only
     userText: String,
     imagePath: String?,
-    knowledgeGraph: KnowledgeGraph,
-    softPromptFile: File?
+    systemPrompt: String,
+    softPromptCache: String
 ): String {
     val sb = StringBuilder()
+    sb.append("<|system|>\n$systemPrompt<|endoftext|>\n")
 
-    // Inject learned knowledge context into system prompt
-    val kgContext = knowledgeGraph.buildContextString()
-    val systemFull = if (kgContext.isNotBlank()) "$BASE_SYSTEM_PROMPT\n\n$kgContext" else BASE_SYSTEM_PROMPT
-
-    sb.append("<|system|>\n$systemFull<|endoftext|>\n")
-
-    // Inject soft prompt (learned examples from nightly training)
-    softPromptFile?.takeIf { it.exists() }?.let {
-        val softPrompt = it.readText().trim()
-        if (softPrompt.isNotBlank()) sb.append(softPrompt).append("\n")
+    // Inject soft-prompt learned examples if available
+    if (softPromptCache.isNotBlank()) {
+        sb.append(softPromptCache).append("\n")
     }
 
-    // History (last 10 turns to stay in context)
-    history.takeLast(10).forEach { msg ->
+    // Last 6 turns of THIS session only (3 user + 3 AI pairs)
+    // Keeping it short prevents the repetition loop seen in testing
+    val recent = sessionHistory.takeLast(6)
+    recent.forEach { msg ->
         if (msg.isUser) sb.append("<|user|>\n${msg.content}<|endoftext|>\n")
         else            sb.append("<|assistant|>\n${msg.content}<|endoftext|>\n")
     }
 
-    // Current turn
-    val imgNote = if (imagePath != null) "\n[Image: $imagePath]" else ""
+    // Current user turn — image note goes here only, not in history
+    val imgNote = if (imagePath != null) "\n[Image provided: $imagePath]" else ""
     sb.append("<|user|>\n$userText$imgNote<|endoftext|>\n")
     sb.append("<|assistant|>\n")
 
     return sb.toString()
+}
+
+// ── Web search via DuckDuckGo Instant Answer API (free, no key) ──────────────
+suspend fun webSearch(query: String): String = withContext(Dispatchers.IO) {
+    try {
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        val url = URL("https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1")
+        val conn = url.openConnection()
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val response = conn.getInputStream().bufferedReader().readText()
+        // Extract AbstractText from JSON
+        val abstract = Regex(""""AbstractText"\s*:\s*"([^"]{10,})"""").find(response)?.groupValues?.get(1)
+        val answer   = Regex(""""Answer"\s*:\s*"([^"]{5,})"""").find(response)?.groupValues?.get(1)
+        val result = answer ?: abstract ?: ""
+        if (result.isBlank()) "No instant answer found. Try a more specific query."
+        else result.replace("\\u003c", "<").replace("\\u003e", ">")
+    } catch (e: Exception) {
+        "Search failed: ${e.message}"
+    }
 }
 
 // ── Data classes ──────────────────────────────────────────────────────────────
@@ -77,6 +89,7 @@ data class ChatMessage(
     val content: String,
     val isUser: Boolean,
     val isLoading: Boolean = false,
+    val thinkingStep: String? = null,   // shown in collapsible thought box
     val mediaPath: String? = null,
     val mediaType: String? = null
 )
@@ -96,7 +109,11 @@ data class ChatUiState(
     val showSessionDrawer: Boolean = false,
     val showSettings: Boolean = false,
     val snackbar: String? = null,
-    val notifPermissionNeeded: Boolean = false
+    val notifPermissionNeeded: Boolean = false,
+    val webSearchEnabled: Boolean = false,
+    val userName: String = "You",
+    val pendingImageUri: Uri? = null,
+    val crashLog: String? = null
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -105,17 +122,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _ui = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _ui.asStateFlow()
 
-    private val model         = LlamaModel.getInstance()
-    private val db            = ChatDatabase.getInstance(application)
+    private val model          = LlamaModel.getInstance()
+    private val db             = ChatDatabase.getInstance(application)
     private val knowledgeGraph = KnowledgeGraph(application)
-    private val tinyRL        = TinyRL(application)
+    private val tinyRL         = TinyRL(application)
     private val nightlyTrainer = NightlyTrainer(application)
-    private val softPromptFile = File(application.filesDir, "soft_prompt_cache.txt")
+    private val prefs: SharedPreferences =
+        application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    private val softPromptFile = File(application.filesDir, "soft_prompt_cache.txt")
     private var sessionJob: Job? = null
     private var speechRecognizer: SpeechRecognizer? = null
 
+    // System prompt — user-editable in settings
+    private var systemPrompt: String
+        get() = prefs.getString("system_prompt",
+            "You are Thunder AGI (الرَّعد), a powerful and helpful AI assistant. " +
+            "Answer clearly and concisely. Reply in the same language the user uses. " +
+            "For code questions, provide working code with explanation.") ?: ""
+        set(v) { prefs.edit().putString("system_prompt", v).apply() }
+
+    private var userName: String
+        get() = prefs.getString("user_name", "You") ?: "You"
+        set(v) { prefs.edit().putString("user_name", v).apply() }
+
     init {
+        _ui.update { it.copy(userName = userName) }
         observeSessions()
         ensureModelLoaded()
         nightlyTrainer.schedule()
@@ -146,7 +178,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeSessions() {
         viewModelScope.launch {
             db.sessionDao().getAllSessions().collect { rows ->
-                _ui.update { it.copy(sessions = rows.map { r -> ChatSession(r.id, r.title, r.updatedAt) }) }
+                _ui.update { s -> s.copy(sessions = rows.map { r ->
+                    ChatSession(r.id, r.title, r.updatedAt) }) }
             }
         }
     }
@@ -167,16 +200,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun switchSession(id: String) {
+        // Cancel previous session's message stream
         sessionJob?.cancel()
+        // CRITICAL: reset KV cache so model doesn't bleed between sessions
         model.resetContext()
-        _ui.update { it.copy(currentSessionId = id, messages = emptyList(), showSessionDrawer = false) }
+        _ui.update { it.copy(
+            currentSessionId = id,
+            messages = emptyList(),
+            showSessionDrawer = false,
+            isGenerating = false   // stop any in-progress generation
+        )}
         sessionJob = viewModelScope.launch {
             db.messageDao().getMessagesForSession(id).collect { rows ->
-                _ui.update { it.copy(messages = rows.map { r ->
-                    ChatMessage(id = r.id, content = r.content, isUser = r.isUser,
-                        mediaPath = r.mediaPath, mediaType = r.mediaType)
-                })}
+                // Only update if this session is still active (prevent race condition)
+                if (_ui.value.currentSessionId == id) {
+                    _ui.update { s -> s.copy(messages = rows.map { r ->
+                        ChatMessage(id = r.id, content = r.content, isUser = r.isUser,
+                            mediaPath = r.mediaPath, mediaType = r.mediaType)
+                    })}
+                }
             }
+        }
+    }
+
+    fun renameSession(id: String, newTitle: String) {
+        viewModelScope.launch {
+            db.sessionDao().insert(SessionEntity(id = id, title = newTitle.trim().take(60),
+                updatedAt = System.currentTimeMillis()))
         }
     }
 
@@ -198,76 +248,146 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onInputChanged(text: String) = _ui.update { it.copy(inputText = text) }
 
-    fun sendMessage(imageUri: Uri? = null) {
-        val text = _ui.value.inputText.trim()
-        if ((text.isBlank() && imageUri == null) || _ui.value.isGenerating) return
+    fun setPendingImage(uri: Uri?) = _ui.update { it.copy(pendingImageUri = uri) }
+
+    fun sendMessage() {
+        val text     = _ui.value.inputText.trim()
+        val imageUri = _ui.value.pendingImageUri
+        // FIX: allow send with image even if text is blank
+        if (text.isBlank() && imageUri == null) return
+        if (_ui.value.isGenerating) return
         val sid = _ui.value.currentSessionId ?: return
-        _ui.update { it.copy(inputText = "") }
+
+        _ui.update { it.copy(inputText = "", pendingImageUri = null) }
 
         viewModelScope.launch {
             val imgPath = imageUri?.let { saveUri(it) }
+            val displayText = text.ifBlank { "📎 Image" }
+
             val userMsg = ChatMessage(
-                content  = text.ifBlank { "[Image]" },
-                isUser   = true,
+                content   = displayText,
+                isUser    = true,
                 mediaPath = imgPath,
                 mediaType = if (imgPath != null) "image" else null
             )
             persistAndShow(userMsg, sid)
 
-            // Auto-title from first user message
+            // Auto-title from first message
             if (_ui.value.messages.count { it.isUser } <= 1 && text.isNotBlank()) {
-                db.sessionDao().insert(SessionEntity(id = sid, title = text.take(45).trim(),
-                    updatedAt = System.currentTimeMillis()))
+                db.sessionDao().insert(SessionEntity(id = sid,
+                    title = text.take(45).trim(), updatedAt = System.currentTimeMillis()))
             }
 
-            generateResponse(text, imgPath, sid)
+            generateResponse(text.ifBlank { "Describe this image." }, imgPath, sid)
         }
     }
 
     private fun generateResponse(userText: String, imagePath: String?, sessionId: String) {
-        viewModelScope.launch {
-            _ui.update { it.copy(isGenerating = true) }
-            _ui.update { it.copy(messages = it.messages +
-                    ChatMessage(content = "", isUser = false, isLoading = true)) }
+        // Use SupervisorJob so background doesn't cancel this
+        viewModelScope.launch(Dispatchers.Default + SupervisorJob()) {
+            withContext(Dispatchers.Main) {
+                _ui.update { it.copy(isGenerating = true) }
+                _ui.update { it.copy(messages = it.messages +
+                        ChatMessage(content = "", isUser = false, isLoading = true,
+                            thinkingStep = "Processing your request…")) }
+            }
 
-            val history = _ui.value.messages.filterNot { it.isLoading }
-            val prompt  = buildZephyrPrompt(history, userText, imagePath, knowledgeGraph, softPromptFile)
+            try {
+                // Web search augmentation
+                var augmentedText = userText
+                if (_ui.value.webSearchEnabled) {
+                    withContext(Dispatchers.Main) {
+                        _ui.update { s -> s.copy(messages = s.messages.map {
+                            if (it.isLoading) it.copy(thinkingStep = "🔍 Searching the web…") else it
+                        })}
+                    }
+                    val searchResult = webSearch(userText)
+                    if (!searchResult.startsWith("No instant") && !searchResult.startsWith("Search failed")) {
+                        augmentedText = "$userText\n\n[Web search result: $searchResult]"
+                    }
+                }
 
-            // TinyRL: get learned sampling params for this topic
-            val topic   = tinyRL.classifyTopic(userText)
-            val rlParams = tinyRL.getParams(topic)
+                // Get ONLY current session's saved messages for context
+                // CRITICAL: fetch directly from DB for this session, not from UI state
+                // which may have loading messages mixed in
+                val sessionHistory = withContext(Dispatchers.IO) {
+                    db.messageDao().getMessagesForSessionOnce(sessionId).map { r ->
+                        ChatMessage(id = r.id, content = r.content, isUser = r.isUser)
+                    }
+                }
 
-            Log.d(TAG, "topic=$topic temp=${rlParams.temperature}")
+                val softCache = if (softPromptFile.exists()) softPromptFile.readText() else ""
+                val prompt = buildZephyrPrompt(
+                    sessionHistory = sessionHistory,
+                    userText       = augmentedText,
+                    imagePath      = imagePath,
+                    systemPrompt   = systemPrompt,
+                    softPromptCache = softCache
+                )
 
-            val response = model.generate(
-                prompt        = prompt,
-                temperature   = rlParams.temperature,
-                topP          = rlParams.topP,
-                topK          = 50,
-                repeatPenalty = rlParams.repPenalty,
-                maxTokens     = 512
-            )
+                val topic    = tinyRL.classifyTopic(userText)
+                val rlParams = tinyRL.getParams(topic)
 
-            _ui.update { it.copy(messages = it.messages.filterNot { m -> m.isLoading }) }
+                withContext(Dispatchers.Main) {
+                    _ui.update { s -> s.copy(messages = s.messages.map {
+                        if (it.isLoading) it.copy(thinkingStep = "⚡ Generating response…") else it
+                    })}
+                }
 
-            val aiMsg = ChatMessage(content = response.ifBlank { "..." }, isUser = false)
-            persistAndShow(aiMsg, sessionId)
-            _ui.update { it.copy(isGenerating = false) }
+                val response = model.generate(
+                    prompt        = prompt,
+                    temperature   = rlParams.temperature,
+                    topP          = rlParams.topP,
+                    topK          = 50,
+                    repeatPenalty = rlParams.repPenalty,
+                    maxTokens     = 768
+                )
 
-            // Learn from conversation asynchronously
-            launch(Dispatchers.IO) {
-                knowledgeGraph.learnFromConversation(userText, response)
+                // Ensure we're still on the same session before saving
+                if (_ui.value.currentSessionId != sessionId) return@launch
+
+                withContext(Dispatchers.Main) {
+                    _ui.update { it.copy(messages = it.messages.filterNot { m -> m.isLoading }) }
+                }
+
+                val aiMsg = ChatMessage(content = response.ifBlank { "…" }, isUser = false)
+
+                withContext(Dispatchers.IO) {
+                    persistAndShow(aiMsg, sessionId)
+                    knowledgeGraph.learnFromConversation(userText, response)
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Generation error", e)
+                val crash = "${e.javaClass.simpleName}: ${e.message}"
+                withContext(Dispatchers.Main) {
+                    _ui.update { it.copy(
+                        messages = it.messages.filterNot { m -> m.isLoading },
+                        crashLog = crash
+                    )}
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    _ui.update { it.copy(isGenerating = false) }
+                }
             }
         }
     }
 
     private suspend fun persistAndShow(msg: ChatMessage, sessionId: String) {
-        db.messageDao().insert(MessageEntity(
-            id = msg.id, sessionId = sessionId,
-            content = msg.content, isUser = msg.isUser,
-            mediaPath = msg.mediaPath, mediaType = msg.mediaType
-        ))
-        db.sessionDao().touch(sessionId)
+        withContext(Dispatchers.IO) {
+            db.messageDao().insert(MessageEntity(
+                id = msg.id, sessionId = sessionId,
+                content = msg.content, isUser = msg.isUser,
+                mediaPath = msg.mediaPath, mediaType = msg.mediaType
+            ))
+            db.sessionDao().touch(sessionId)
+        }
+        withContext(Dispatchers.Main) {
+            if (_ui.value.currentSessionId == sessionId) {
+                _ui.update { it.copy(messages = it.messages + msg) }
+            }
+        }
     }
 
     fun clearChat() {
@@ -279,22 +399,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Settings ───────────────────────────────────────────────────────────────
+
+    fun saveUserName(name: String) {
+        userName = name.trim().take(20).ifBlank { "You" }
+        _ui.update { it.copy(userName = userName) }
+    }
+
+    fun saveSystemPrompt(prompt: String) { systemPrompt = prompt }
+    fun getSystemPrompt() = systemPrompt
+    fun toggleWebSearch() = _ui.update { it.copy(webSearchEnabled = !it.webSearchEnabled) }
+
     // ── Feedback (TinyRL) ──────────────────────────────────────────────────────
 
     fun submitFeedback(msgId: String, good: Boolean) {
         val msg  = _ui.value.messages.find { it.id == msgId } ?: return
         val prev = _ui.value.messages.takeWhile { it.id != msgId }.lastOrNull { it.isUser }
-
-        // Apply RL signal
         val topic = tinyRL.classifyTopic(prev?.content ?: "")
         tinyRL.applyFeedback(topic, good)
-
-        // Persist for nightly training
         viewModelScope.launch(Dispatchers.IO) {
             val line = """{"prompt":${prev?.content.orEmpty().jsonStr()},"response":${msg.content.jsonStr()},"good":$good}""" + "\n"
             File(getApplication<Application>().filesDir, "feedback_log.jsonl").appendText(line)
         }
-        _ui.update { it.copy(snackbar = if (good) "👍 Saved — model will improve!" else "👎 Noted") }
+        _ui.update { it.copy(snackbar = if (good) "👍 Saved!" else "👎 Noted") }
     }
 
     fun importFineTune(uri: Uri) {
@@ -304,23 +431,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 getApplication<Application>().contentResolver.openInputStream(uri)?.use { i ->
                     FileOutputStream(dest).use { o -> i.copyTo(o) }
                 }
-                _ui.update { it.copy(snackbar = "Fine-tune imported! Restart app to apply.") }
+                _ui.update { it.copy(snackbar = "✅ Fine-tune imported! Restart to apply.") }
             } catch (e: Exception) {
-                _ui.update { it.copy(snackbar = "Import failed: ${e.message}") }
+                _ui.update { it.copy(snackbar = "❌ Import failed: ${e.message}") }
             }
         }
     }
 
-    // ── Notification / WhatsApp sync ───────────────────────────────────────────
+    fun exportFeedbackLog() {
+        val file = File(getApplication<Application>().filesDir, "feedback_log.jsonl")
+        _ui.update { it.copy(snackbar = if (file.exists())
+            "Feedback log: ${file.absolutePath} (${file.length()/1024}KB)"
+            else "No feedback data yet") }
+    }
+
+    // ── Notification / WhatsApp ────────────────────────────────────────────────
 
     private fun checkNotifPermission() {
-        val granted = UpdateNotificationListener.isPermissionGranted(getApplication())
-        _ui.update { it.copy(notifPermissionNeeded = !granted) }
+        _ui.update { it.copy(
+            notifPermissionNeeded = !UpdateNotificationListener.isPermissionGranted(getApplication())
+        )}
     }
 
-    fun openNotifPermissionSettings(context: Context) {
+    fun openNotifSettings(context: Context) =
         UpdateNotificationListener.openPermissionSettings(context)
-    }
 
     fun dismissNotifPrompt() = _ui.update { it.copy(notifPermissionNeeded = false) }
 
@@ -328,32 +462,52 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startVoice(context: Context) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            _ui.update { it.copy(snackbar = "Speech recognition not available") }
+            _ui.update { it.copy(snackbar = "Speech recognition not available on this device") }
             return
         }
         speechRecognizer?.destroy()
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).also { sr ->
             sr.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(p: android.os.Bundle?) = _ui.update { it.copy(isRecording = true) }
+                override fun onReadyForSpeech(p: android.os.Bundle?) {
+                    _ui.update { it.copy(isRecording = true, snackbar = "🎤 Listening…") }
+                }
                 override fun onResults(r: android.os.Bundle?) {
-                    val t = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
-                    _ui.update { it.copy(inputText = it.inputText + t, isRecording = false) }
+                    val t = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull() ?: ""
+                    _ui.update { it.copy(inputText = (_ui.value.inputText + " " + t).trim(),
+                        isRecording = false, snackbar = null) }
                 }
                 override fun onPartialResults(r: android.os.Bundle?) {
-                    val t = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
+                    val t = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull() ?: ""
                     if (t.isNotBlank()) _ui.update { it.copy(inputText = t) }
                 }
-                override fun onError(e: Int) = _ui.update { it.copy(isRecording = false) }
+                override fun onError(e: Int) {
+                    val msg = when(e) {
+                        SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
+                        SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                        SpeechRecognizer.ERROR_AUDIO -> "Audio error"
+                        else -> "Speech error ($e)"
+                    }
+                    _ui.update { it.copy(isRecording = false, snackbar = msg) }
+                }
                 override fun onBeginningOfSpeech() {}
-                override fun onEndOfSpeech()      {}
+                override fun onEndOfSpeech() {}
                 override fun onBufferReceived(b: ByteArray?) {}
                 override fun onRmsChanged(r: Float) {}
                 override fun onEvent(t: Int, p: android.os.Bundle?) {}
             })
-            sr.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            })
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA,en-US")
+        }
+        try {
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            _ui.update { it.copy(isRecording = false, snackbar = "Could not start recording: ${e.message}") }
         }
     }
 
@@ -362,15 +516,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(isRecording = false) }
     }
 
-    fun clearSnackbar() = _ui.update { it.copy(snackbar = null) }
+    // ── Crash reporter ────────────────────────────────────────────────────────
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
+    fun clearCrashLog() = _ui.update { it.copy(crashLog = null) }
+
+    // ── Misc ──────────────────────────────────────────────────────────────────
+
+    fun clearSnackbar() = _ui.update { it.copy(snackbar = null) }
 
     private suspend fun saveUri(uri: Uri): String? = withContext(Dispatchers.IO) {
         try {
             val ext = getApplication<Application>().contentResolver.getType(uri)
                 ?.substringAfterLast("/") ?: "jpg"
-            val f = File(getApplication<Application>().filesDir, "img_${System.currentTimeMillis()}.$ext")
+            val f = File(getApplication<Application>().filesDir,
+                "img_${System.currentTimeMillis()}.$ext")
             getApplication<Application>().contentResolver.openInputStream(uri)
                 ?.use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
             f.absolutePath
