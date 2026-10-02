@@ -215,11 +215,44 @@ class AgentToolkit(private val context: Context) {
     }
 
     private fun evalMath(expr: String): String {
-        // Safe subset — only basic arithmetic
-        val safe = expr.replace("^", "Math.pow").replace(",","")
-        val engine = javax.script.ScriptEngineManager().getEngineByName("rhino")
-            ?: return "?"
-        return engine.eval(safe).toString()
+        // Simple arithmetic evaluator without javax.script
+        return try {
+            val result = evalArithmetic(expr.replace(" ", ""))
+            if (result == result.toLong().toDouble()) result.toLong().toString()
+            else "%.4f".format(result)
+        } catch (e: Exception) { "?" }
+    }
+
+    private fun evalArithmetic(expr: String): Double {
+        var i = 0
+        fun parseNum(): Double {
+            val neg = expr.getOrNull(i) == '-'
+            if (neg) i++
+            val start = i
+            while (i < expr.length && (expr[i].isDigit() || expr[i] == '.')) i++
+            return (if (neg) "-" else "") + expr.substring(start, i).ifEmpty { "0" }.toDouble()
+        }
+        fun parseFactor(): Double {
+            return if (i < expr.length && expr[i] == '(') {
+                i++; val v = parseExpr(); i++; v
+            } else parseNum()
+        }
+        fun parseTerm(): Double {
+            var v = parseFactor()
+            while (i < expr.length && (expr[i] == '*' || expr[i] == '/')) {
+                val op = expr[i++]; val r = parseFactor()
+                v = if (op == '*') v * r else v / r
+            }
+            return v
+        }
+        fun parseExpr(): Double {
+            var v = parseTerm()
+            while (i < expr.length && (expr[i] == '+' || expr[i] == '-')) {
+                val op = expr[i++]; v = if (op == '+') v + parseTerm() else v - parseTerm()
+            }
+            return v
+        }
+        return parseExpr()
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
