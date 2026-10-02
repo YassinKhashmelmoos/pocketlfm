@@ -17,6 +17,8 @@ import com.example.lfm25.data.SessionEntity
 import com.example.lfm25.intelligence.KnowledgeGraph
 import com.example.lfm25.intelligence.NightlyTrainer
 import com.example.lfm25.intelligence.TinyRL
+import com.example.lfm25.intelligence.SelfImprover
+import com.example.lfm25.p2p.PeerSync
 import com.example.lfm25.llama.LlamaModel
 import com.example.lfm25.agent.AgentToolkit
 import com.example.lfm25.agent.CodeExecutor
@@ -138,15 +140,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val agentToolkit  = AgentToolkit(application)
     private val codeExecutor  = CodeExecutor(application)
     private val crashReporter = CrashReporter.install(application)
+    private val selfImprover  = SelfImprover(application)
+    val peerSync = PeerSync(application)
     private var sessionJob: Job? = null
     private var speechRecognizer: SpeechRecognizer? = null
 
     // System prompt — user-editable in settings
     private var systemPrompt: String
-        get() = prefs.getString("system_prompt",
-            "You are Thunder AGI (الرَّعد), a powerful and helpful AI assistant. " +
-            "Answer clearly and concisely. Reply in the same language the user uses. " +
-            "For code questions, provide working code with explanation.") ?: ""
+        get() {
+            val evolved = selfImprover.getEvolvedPrompt("")
+            val base = prefs.getString("system_prompt",
+                "You are Thunder AGI (الرَّعد للذكاء العام المصطنع), a powerful and helpful AI. " +
+                "Rules: (1) Never repeat sentences or phrases you already wrote. " +
+                "(2) Each response must be DIFFERENT from your previous ones. " +
+                "(3) Answer in the same language the user uses — Arabic or English. " +
+                "(4) Give direct answers. For code: provide working examples. " +
+                "(5) Never include <|user|>, <|assistant|> or other tokens in responses. " +
+                "(6) If you have already answered something, give new information or say so.") ?: ""
+            return if (evolved.isNotBlank()) "$base
+$evolved" else base
+        }
         set(v) { prefs.edit().putString("system_prompt", v).apply() }
 
     private var userName: String
@@ -300,6 +313,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
+                // Image generation request detection
+                val lowerText = userText.lowercase()
+                if (_ui.value.webSearchEnabled &&
+                    lowerText.contains(Regex("generate|create|draw|make|show me|image of|picture of"))) {
+                    val imageSubject = userText
+                        .replace(Regex("generate|create|draw|make|show me a?n?|image of|picture of", RegexOption.IGNORE_CASE), "")
+                        .trim().take(100)
+                    if (imageSubject.length > 3) {
+                        val encoded = java.net.URLEncoder.encode(imageSubject, "UTF-8")
+                        val imageUrl = "https://image.pollinations.ai/prompt/$encoded?width=512&height=512&nologo=true"
+                        withContext(Dispatchers.Main) {
+                            val imageMsg = ChatMessage(
+                                content = "🎨 Generated: $imageSubject",
+                                isUser = false,
+                                mediaPath = imageUrl,
+                                mediaType = "image_url"
+                            )
+                            persistAndShow(imageMsg, sessionId)
+                        }
+                    }
+                }
+
                 // Web search augmentation
                 var augmentedText = userText
                 if (_ui.value.webSearchEnabled) {
@@ -364,7 +399,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _ui.update { it.copy(messages = it.messages.filterNot { m -> m.isLoading }) }
                 }
 
-                val aiMsg = ChatMessage(content = response.ifBlank { "…" }, isUser = false)
+                val aiMsg = ChatMessage(content = cleanModelOutput(response), isUser = false)
 
                 withContext(Dispatchers.IO) {
                     persistAndShow(aiMsg, sessionId)
@@ -401,6 +436,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (_ui.value.currentSessionId == sessionId) {
                 _ui.update { it.copy(messages = it.messages + msg) }
             }
+        }
+    }
+
+    fun deleteMessage(msgId: String) {
+        val sessionId = _ui.value.currentSessionId ?: return
+        viewModelScope.launch {
+            db.messageDao().deleteById(msgId)
+            _ui.update { it.copy(messages = it.messages.filterNot { m -> m.id == msgId }) }
         }
     }
 
@@ -548,6 +591,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ?.use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
             f.absolutePath
         } catch (e: Exception) { null }
+    }
+
+    /** Strip any leaked prompt tokens from model output */
+    private fun cleanModelOutput(raw: String): String {
+        var s = raw.trim()
+        // Remove any leaked template tokens
+        val stopPatterns = listOf(
+            "<|user|>", "<|assistant|>", "<|system|>", "<|endoftext|>",
+            "</s>", "<|end|>", "<|im_end|>", "|assistant|>", "|user|>",
+            "|assistant|/>", "</|user>", "</|assistant>"
+        )
+        for (token in stopPatterns) {
+            val idx = s.indexOf(token)
+            if (idx != -1) s = s.substring(0, idx)
+        }
+        // Remove trailing incomplete tokens like "<|"
+        s = s.trimEnd().trimEnd('<').trimEnd('|').trim()
+        return s.ifBlank { "…" }
     }
 
     private fun String.jsonStr() =
