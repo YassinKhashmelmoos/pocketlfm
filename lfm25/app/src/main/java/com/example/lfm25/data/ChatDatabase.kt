@@ -54,6 +54,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: String)
+
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
 @Database(entities = [SessionEntity::class, MessageEntity::class], version = 1, exportSchema = false)
