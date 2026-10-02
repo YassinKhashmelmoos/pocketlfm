@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.text.style.*
+import androidx.compose.ui.text.TextAlign
 import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
 import com.example.lfm25.ui.theme.*
@@ -50,6 +51,7 @@ fun ChatScreen(
     onStopVoice: () -> Unit,
     onThumbsUp: (String) -> Unit,
     onThumbsDown: (String) -> Unit,
+    onDeleteMessage: (String) -> Unit,
     onImportFineTune: (Uri) -> Unit,
     onExportFeedback: () -> Unit,
     onClearSnackbar: () -> Unit,
@@ -393,6 +395,7 @@ private fun MessageList(
     userName: String,
     onUp: (String) -> Unit,
     onDown: (String) -> Unit,
+    onDeleteMessage: (String) -> Unit,
     onClear: (() -> Unit)?,
     modifier: Modifier
 ) {
@@ -442,16 +445,21 @@ private fun MessageBubble(
     msg: ChatMessage,
     userName: String,
     onUp: (String) -> Unit,
-    onDown: (String) -> Unit
+    onDown: (String) -> Unit,
+    onDeleteMessage: (String) -> Unit
 ) {
     val isUser = msg.isUser
     val clipboard = LocalClipboardManager.current
     var showMenu by remember { mutableStateOf(false) }
     var showThinking by remember { mutableStateOf(false) }
 
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
     Column(
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.widthIn(max = 300.dp)
     ) {
         // Sender label
         Text(
@@ -492,8 +500,9 @@ private fun MessageBubble(
         ) {
             Column {
                 msg.mediaPath?.let { path ->
+                    val model: Any = if (path.startsWith("http")) path else File(path)
                     AsyncImage(
-                        model = File(path),
+                        model = model,
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -574,6 +583,138 @@ private fun ThinkingBox(step: String, expanded: Boolean, onToggle: () -> Unit) {
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
         }
     }
+}
+
+
+@Composable
+private fun MarkdownText(text: String) {
+    // Detect if text is primarily Arabic (RTL)
+    val arabicChars = text.count { it in '\u0600'..'\u06FF' }
+    val isRTL = arabicChars > text.length / 3
+    val textAlign = if (isRTL) TextAlign.Right else TextAlign.Start
+
+    val lines = text.lines()
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        lines.forEach { line ->
+            when {
+                // Headers
+                line.startsWith("### ") -> Text(
+                    line.removePrefix("### "),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ThunderElectric,
+                    textAlign = textAlign,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                line.startsWith("## ") -> Text(
+                    line.removePrefix("## "),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = ThunderElectric,
+                    textAlign = textAlign,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                line.startsWith("# ") -> Text(
+                    line.removePrefix("# "),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = ThunderElectric,
+                    textAlign = textAlign,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // Bullet points
+                line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") -> {
+                    Row(horizontalArrangement = Arrangement.Start) {
+                        Text("• ", color = ThunderElectric,
+                            style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            buildInlineMarkdown(line.trimStart().removePrefix("- ").removePrefix("* ")),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ThunderWhite,
+                            lineHeight = 22.sp
+                        )
+                    }
+                }
+                // Numbered list
+                line.trimStart().matches(Regex("\\d+\\..*")) -> {
+                    Row(horizontalArrangement = Arrangement.Start) {
+                        Text(line.trimStart().substringBefore(".") + ". ",
+                            color = ThunderElectric,
+                            style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            buildInlineMarkdown(line.trimStart().substringAfter(". ")),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ThunderWhite,
+                            lineHeight = 22.sp
+                        )
+                    }
+                }
+                // Horizontal rule
+                line.trim() == "---" || line.trim() == "***" ->
+                    HorizontalDivider(color = ThunderMidBlue, modifier = Modifier.padding(vertical = 4.dp))
+                // Empty line = spacer
+                line.isBlank() -> Spacer(Modifier.height(4.dp))
+                // Normal text with inline markdown
+                else -> Text(
+                    buildInlineMarkdown(line),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ThunderWhite,
+                    lineHeight = 22.sp,
+                    textAlign = textAlign,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+fun buildInlineMarkdown(text: String): androidx.compose.ui.text.AnnotatedString {
+    val builder = androidx.compose.ui.text.AnnotatedString.Builder()
+    var i = 0
+    while (i < text.length) {
+        when {
+            // Bold **text**
+            text.startsWith("**", i) -> {
+                val end = text.indexOf("**", i + 2)
+                if (end != -1) {
+                    builder.pushStyle(androidx.compose.ui.text.SpanStyle(
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        color = androidx.compose.ui.graphics.Color(0xFFEAF6FF)
+                    ))
+                    builder.append(text.substring(i + 2, end))
+                    builder.pop()
+                    i = end + 2
+                } else { builder.append(text[i]); i++ }
+            }
+            // Italic *text* or _text_
+            (text.startsWith("*", i) && !text.startsWith("**", i)) ||
+            (text.startsWith("_", i) && !text.startsWith("__", i)) -> {
+                val delim = text[i].toString()
+                val end = text.indexOf(delim, i + 1)
+                if (end != -1 && end > i + 1) {
+                    builder.pushStyle(androidx.compose.ui.text.SpanStyle(
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                    ))
+                    builder.append(text.substring(i + 1, end))
+                    builder.pop()
+                    i = end + 1
+                } else { builder.append(text[i]); i++ }
+            }
+            // Inline code `code`
+            text.startsWith("`", i) -> {
+                val end = text.indexOf("`", i + 1)
+                if (end != -1) {
+                    builder.pushStyle(androidx.compose.ui.text.SpanStyle(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        background = androidx.compose.ui.graphics.Color(0xFF0D1117),
+                        color = androidx.compose.ui.graphics.Color(0xFF4FC3F7)
+                    ))
+                    builder.append(text.substring(i + 1, end))
+                    builder.pop()
+                    i = end + 1
+                } else { builder.append(text[i]); i++ }
+            }
+            else -> { builder.append(text[i]); i++ }
+        }
+    }
+    return builder.toAnnotatedString()
 }
 
 @Composable
@@ -721,7 +862,7 @@ private fun InputSection(
                         if (!generating) { onSend(); keyboard?.hide() }
                     }),
                     singleLine = false, maxLines = 5,
-                    enabled = !generating && !recording,
+                    enabled = !recording,  // Allow typing while model generates
                     shape = RoundedCornerShape(20.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor    = ThunderElectric,
