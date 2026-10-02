@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                         onStopVoice          = vm::stopVoice,
                         onThumbsUp           = { vm.submitFeedback(it, true) },
                         onThumbsDown         = { vm.submitFeedback(it, false) },
+                        onDeleteMessage      = vm::deleteMessage,
                         onImportFineTune     = vm::importFineTune,
                         onExportFeedback     = vm::exportFeedbackLog,
                         onClearSnackbar      = vm::clearSnackbar,
