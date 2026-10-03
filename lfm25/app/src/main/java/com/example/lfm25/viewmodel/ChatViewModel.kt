@@ -157,8 +157,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 "(4) Give direct answers. For code: provide working examples. " +
                 "(5) Never include <|user|>, <|assistant|> or other tokens in responses. " +
                 "(6) If you have already answered something, give new information or say so.") ?: ""
-            return if (evolved.isNotBlank()) "$base
-$evolved" else base
+            return if (evolved.isNotBlank()) "$base\n$evolved" else base
         }
         set(v) { prefs.edit().putString("system_prompt", v).apply() }
 
