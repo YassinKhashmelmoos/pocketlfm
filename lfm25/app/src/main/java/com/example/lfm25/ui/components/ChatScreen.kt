@@ -26,7 +26,7 @@ import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.text.style.*
-import androidx.compose.ui.text.TextAlign
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
 import com.example.lfm25.ui.theme.*
@@ -205,6 +205,7 @@ fun ChatScreen(
                     userName  = uiState.userName,
                     onUp      = onThumbsUp,
                     onDown    = onThumbsDown,
+                    onDeleteMessage = onDeleteMessage,
                     onClear   = if (uiState.messages.isNotEmpty()) onClearChat else null,
                     modifier  = Modifier.fillMaxSize()
                 )
@@ -418,7 +419,7 @@ private fun MessageList(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(messages, key = { it.id }) { msg ->
-                MessageBubble(msg, userName, onUp, onDown)
+                MessageBubble(msg, userName, onUp, onDown, onDeleteMessage)
             }
             // Clear button at bottom
             if (onClear != null) {
