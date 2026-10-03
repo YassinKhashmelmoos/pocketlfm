@@ -215,44 +215,84 @@ class AgentToolkit(private val context: Context) {
     }
 
     private fun evalMath(expr: String): String {
-        // Simple arithmetic evaluator without javax.script
         return try {
-            val result = evalArithmetic(expr.replace(" ", ""))
+            val result = MathEval(expr.replace(" ", "")).parse()
             if (result == result.toLong().toDouble()) result.toLong().toString()
             else "%.4f".format(result)
         } catch (e: Exception) { "?" }
     }
 
+    // Simple recursive descent math parser — no forward reference issues
+    private inner class MathEval(private val s: String) {
+        private var p = 0
+        fun parse(): Double = addSub()
+        private fun addSub(): Double {
+            var v = mulDiv()
+            while (p < s.length && (s[p] == '+' || s[p] == '-')) {
+                val op = s[p++]; v = if (op == '+') v + mulDiv() else v - mulDiv()
+            }
+            return v
+        }
+        private fun mulDiv(): Double {
+            var v = unary()
+            while (p < s.length && (s[p] == '*' || s[p] == '/')) {
+                val op = s[p++]; v = if (op == '*') v * unary() else v / unary()
+            }
+            return v
+        }
+        private fun unary(): Double {
+            if (p < s.length && s[p] == '-') { p++; return -atom() }
+            return atom()
+        }
+        private fun atom(): Double {
+            if (p < s.length && s[p] == '(') {
+                p++; val v = addSub()
+                if (p < s.length && s[p] == ')') p++
+                return v
+            }
+            val start = p
+            while (p < s.length && (s[p].isDigit() || s[p] == '.')) p++
+            return s.substring(start, p).ifEmpty { "0" }.toDouble()
+        }
+    }
+
     private fun evalArithmetic(expr: String): Double {
-        var i = 0
-        fun parseNum(): Double {
-            val neg = expr.getOrNull(i) == '-'
-            if (neg) i++
-            val start = i
-            while (i < expr.length && (expr[i].isDigit() || expr[i] == '.')) i++
-            return (if (neg) "-" else "") + expr.substring(start, i).ifEmpty { "0" }.toDouble()
+        var pos = 0
+        fun num(): Double {
+            val neg = pos < expr.length && expr[pos] == '-'
+            if (neg) pos++
+            val s = pos
+            while (pos < expr.length && (expr[pos].isDigit() || expr[pos] == '.')) pos++
+            val n = expr.substring(s, pos).ifEmpty { "0" }.toDouble()
+            return if (neg) -n else n
         }
-        fun parseFactor(): Double {
-            return if (i < expr.length && expr[i] == '(') {
-                i++; val v = parseExpr(); i++; v
-            } else parseNum()
+        fun expr2(): Double // forward declare via lambda
+        val exprFn: () -> Double
+        val termFn: () -> Double
+        val factorFn: () -> Double
+        factorFn = {
+            if (pos < expr.length && expr[pos] == '(') {
+                pos++
+                val v = exprFn()
+                if (pos < expr.length && expr[pos] == ')') pos++
+                v
+            } else num()
         }
-        fun parseTerm(): Double {
-            var v = parseFactor()
-            while (i < expr.length && (expr[i] == '*' || expr[i] == '/')) {
-                val op = expr[i++]; val r = parseFactor()
-                v = if (op == '*') v * r else v / r
+        termFn = {
+            var v = factorFn()
+            while (pos < expr.length && (expr[pos] == '*' || expr[pos] == '/')) {
+                val op = expr[pos++]; v = if (op == '*') v * factorFn() else v / factorFn()
             }
-            return v
+            v
         }
-        fun parseExpr(): Double {
-            var v = parseTerm()
-            while (i < expr.length && (expr[i] == '+' || expr[i] == '-')) {
-                val op = expr[i++]; v = if (op == '+') v + parseTerm() else v - parseTerm()
+        exprFn = {
+            var v = termFn()
+            while (pos < expr.length && (expr[pos] == '+' || expr[pos] == '-')) {
+                val op = expr[pos++]; v = if (op == '+') v + termFn() else v - termFn()
             }
-            return v
+            v
         }
-        return parseExpr()
+        return exprFn()
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
