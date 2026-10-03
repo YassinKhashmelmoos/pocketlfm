@@ -266,34 +266,9 @@ class AgentToolkit(private val context: Context) {
             val n = expr.substring(s, pos).ifEmpty { "0" }.toDouble()
             return if (neg) -n else n
         }
-        fun expr2(): Double // forward declare via lambda
-        val exprFn: () -> Double
-        val termFn: () -> Double
-        val factorFn: () -> Double
-        factorFn = {
-            if (pos < expr.length && expr[pos] == '(') {
-                pos++
-                val v = exprFn()
-                if (pos < expr.length && expr[pos] == ')') pos++
-                v
-            } else num()
-        }
-        termFn = {
-            var v = factorFn()
-            while (pos < expr.length && (expr[pos] == '*' || expr[pos] == '/')) {
-                val op = expr[pos++]; v = if (op == '*') v * factorFn() else v / factorFn()
-            }
-            v
-        }
-        exprFn = {
-            var v = termFn()
-            while (pos < expr.length && (expr[pos] == '+' || expr[pos] == '-')) {
-                val op = expr[pos++]; v = if (op == '+') v + termFn() else v - termFn()
-            }
-            v
-        }
-        return exprFn()
+        return MathEval(expr).parse()
     }
+
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
