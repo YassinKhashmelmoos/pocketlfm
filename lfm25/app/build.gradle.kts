@@ -109,8 +109,9 @@ dependencies {
     implementation("org.json:json:20231013")
 
     // WebView is part of Android SDK — no extra dependency needed
-    // Script engine for math eval
-    implementation("org.mozilla:rhino:1.7.14")
+
+    // ONNX Runtime for on-device ML models (emotion, classification)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
