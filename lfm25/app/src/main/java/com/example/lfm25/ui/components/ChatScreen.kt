@@ -457,10 +457,10 @@ private fun MessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-    Column(
-        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-        modifier = Modifier.widthIn(max = 300.dp)
-    ) {
+        Column(
+            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+            modifier = Modifier.widthIn(max = 300.dp)
+        ) {
         // Sender label
         Text(
             if (isUser) userName else "Thunder AGI",
@@ -549,6 +549,7 @@ private fun MessageBubble(
                 }
             }
         }
+    }
     }
 }
 
